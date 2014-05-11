@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from sys import argv
 from struct import unpack
 from shutil import rmtree
+from sys import argv, exit
 from zipfile import ZipFile
 from tempfile import gettempdir
 from datetime import datetime, timedelta
@@ -24,14 +24,13 @@ def unzip_jtv(file_name):
 	extract_path = join(gettempdir(), 'jtv_to_xmltv')
 	try:
 		rmtree(extract_path)
-	except OSError as e:
-		print e
+	except OSError:
+		pass
 	mkdir(extract_path)
 	# Extract EPG
 	with ZipFile(file_name) as z:
 		for name in z.namelist():
 			file_path = join(extract_path, decode_name(name))
-			# print file_path
 			with open(file_path, 'w') as f:
 				f.write(z.read(name))
 	return extract_path
@@ -47,15 +46,13 @@ def process_jtv_directory(jtv_path):
 	def from_timestamp(timestamp):
 		return datetime(1601, 1, 1) + timedelta(seconds = int(timestamp / 10000000))
 
-	print 'Processing "%s"' % jtv_path
+	guides_list = list()
 	for ndx in list_ndx(jtv_path):
-		pdt = splitext(ndx)[0] + '.pdt'
-		print u'============================================================================'
-		print splitext(pdt)[0]
-		print u'----------------------------------------------------------------------------'
+		guide = dict(name=splitext(ndx)[0])
+		pdt = guide['name'] + '.pdt'
 		with open(join(jtv_path, pdt), 'r') as pdt_file:
 			hdr = pdt_file.read(26)
-			entries = dict()
+			broadcasts = dict()
 			if hdr != 'JTV 3.x TV Program Data\x0a\x0a\x0a':
 				print pdt, 'does not contain valid header!'
 				continue
@@ -68,26 +65,38 @@ def process_jtv_directory(jtv_path):
 				track = pdt_file.read(l).decode('cp1251').encode('utf-8')
 				if track == '':
 					break
-				entries[key] = track
+				broadcasts[key] = track
 				key += l + 2
-			# JTV 3.x TV Program Data
+			guide['broadcasts'] = broadcasts
 			with open(join(jtv_path, ndx), 'r') as ndx_file:
 				num_entries = unpack('H', ndx_file.read(2))[0]
+				entries = list()
 				for i in range(0, num_entries):
 					ndx_file.read(2)
 					time = from_timestamp(unpack('Q', ndx_file.read(8))[0])
 					offset = unpack('H', ndx_file.read(2))[0]
-					print time, entries[offset]
+					entries.append((time, offset))
+				guide['entries'] = entries
+		guides_list.append(guide)
+	return guides_list
 
-	# for f in list_ndx(jtv_path):
-		# print f
 
+def write_epg(epg):
+	for e in epg:
+		print u'============================================================================'
+		print e['name']
+		print u'============================================================================'
+		for entry in e['entries']:
+			print entry[0].strftime('%d.%m.%Y %H:%M'), e['broadcasts'][entry[1]]
+		print ''
 
 if __name__ == '__main__':
 	for p in [ abspath(p) for p in argv[1:] ]:
 		if isfile(p) and splitext(p)[1].lower() == '.zip':
-			process_jtv_directory(unzip_jtv(p))
+			epg = process_jtv_directory(unzip_jtv(p))
 		elif isdir(p):
-			process_jtv_directory(p)
+			epg = process_jtv_directory(p)
 		else:
 			print 'Expected zip archive or directory!'
+			exit(1)
+	write_epg(epg)
